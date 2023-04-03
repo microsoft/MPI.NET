@@ -15,8 +15,7 @@ if MPINET_CBRIDGE
 lib_LTLIBRARIES = libmpinet.la
 endif
 
-SOURCES=$(srcdir)/ActionStream.cs		\
-	$(srcdir)/Attribute.cs			\
+SOURCES=$(srcdir)/Attribute.cs			\
 	$(srcdir)/CartesianCommunicator.cs	\
 	$(srcdir)/Communicator.cs		\
 	$(srcdir)/Comparison.cs			\
@@ -27,16 +26,17 @@ SOURCES=$(srcdir)/ActionStream.cs		\
 	$(srcdir)/Group.cs			\
 	$(srcdir)/Intercommunicator.cs		\
 	$(srcdir)/Intracommunicator.cs		\
-	$(srcdir)/Memory.cs			\
 	$(srcdir)/Operation.cs			\
 	$(srcdir)/Request.cs			\
 	$(srcdir)/RequestList.cs		\
-	$(srcdir)/Serialization.cs		\
-	$(srcdir)/SpanTimer.cs			\
 	$(srcdir)/Status.cs			\
 	$(srcdir)/TagAllocator.cs		\
 	$(srcdir)/TopologicalCommunicator.cs	\
-	$(srcdir)/UnmanagedMemoryStream.cs
+	$(srcdir)/UnmanagedMemoryStream.cs \
+	$(srcdir)/Serialization.cs \
+	$(srcdir)/SpanTimer.cs \
+	$(srcdir)/Memory.cs \
+	$(srcdir)/ActionStream.cs
 
 # We want to install directly into /lib, but we can't write lib_SCRIPTS
 pkglibexecdir = $(libdir)
@@ -45,7 +45,7 @@ EXTRA_DIST = $(SOURCES) Unsafe.cs Unsafe.pl MPI.dll.config.in
 CLEANFILES = MPI.dll CustomUnsafe.cs cbridge.c
 
 MPI.dll: $(SOURCES) CustomUnsafe.cs
-	$(MCS) -out:$@ -unsafe -target:library $(CSHARP_FLAGS) $(SOURCES) CustomUnsafe.cs
+	$(MCS) -out:$@ -unsafe -target:library $(CSHARP_FLAGS) $(SOURCES) CustomUnsafe.cs 
 
 CustomUnsafe.cs cbridge.c: $(srcdir)/Unsafe.cs $(srcdir)/Unsafe.pl $(MPI_HEADER)
 	$(PERL) $(srcdir)/Unsafe.pl $(MPI_HEADER) $(srcdir)/Unsafe.cs CustomUnsafe.cs cbridge.c @DEFS@

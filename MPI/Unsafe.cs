@@ -94,6 +94,8 @@ namespace MPI
 
 #if MPICH2
         private const string MPI_DLL = "mpich2.dll";
+#elif LIBMPI
+        private const string MPI_DLL = "mpi";
 #else
         private const string MPI_DLL = "msmpi.dll";
 #endif

@@ -19,8 +19,8 @@ AC_DISABLE_STATIC
 AC_PROG_LIBTOOL
 
 dnl C# compiler
-AC_PATH_PROG(CSC, csc, no)
-AC_PATH_PROG(MCS, gmcs, no)
+AC_PATH_PROG(CSC, mcs, no)
+AC_PATH_PROG(MCS, mcs, no)
 AC_PATH_PROG(MONO, mono, no)
 
 dnl CIL assembler
