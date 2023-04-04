@@ -15,7 +15,8 @@ if MPINET_CBRIDGE
 lib_LTLIBRARIES = libmpinet.la
 endif
 
-SOURCES=$(srcdir)/Attribute.cs			\
+SOURCES=$(srcdir)/ActionStream.cs			\
+	$(srcdir)/Attribute.cs	\
 	$(srcdir)/CartesianCommunicator.cs	\
 	$(srcdir)/Communicator.cs		\
 	$(srcdir)/Comparison.cs			\
@@ -26,17 +27,16 @@ SOURCES=$(srcdir)/Attribute.cs			\
 	$(srcdir)/Group.cs			\
 	$(srcdir)/Intercommunicator.cs		\
 	$(srcdir)/Intracommunicator.cs		\
+	$(srcdir)/Memory.cs	\
 	$(srcdir)/Operation.cs			\
 	$(srcdir)/Request.cs			\
 	$(srcdir)/RequestList.cs		\
+	$(srcdir)/Serialization.cs	\
+	$(srcdir)/SpanTimer.cs	\
 	$(srcdir)/Status.cs			\
 	$(srcdir)/TagAllocator.cs		\
 	$(srcdir)/TopologicalCommunicator.cs	\
-	$(srcdir)/UnmanagedMemoryStream.cs \
-	$(srcdir)/Serialization.cs \
-	$(srcdir)/SpanTimer.cs \
-	$(srcdir)/Memory.cs \
-	$(srcdir)/ActionStream.cs
+	$(srcdir)/UnmanagedMemoryStream.cs
 
 # We want to install directly into /lib, but we can't write lib_SCRIPTS
 pkglibexecdir = $(libdir)
