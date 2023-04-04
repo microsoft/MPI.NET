@@ -19,7 +19,8 @@ AC_DISABLE_STATIC
 AC_PROG_LIBTOOL
 
 dnl C# compiler
-AC_PATH_PROG(CSC, mcs, no)
+AC_PATH_PROG(CSC, csc, no)
+AC_PATH_PROG(GMCS, gmcs, no)
 AC_PATH_PROG(MCS, mcs, no)
 AC_PATH_PROG(MONO, mono, no)
 
@@ -35,8 +36,12 @@ CSHARP_FLAGS="-optimize+"
 CSHARP_DEFINES=""
 
 CS="C#"
-if test "x$CSC" = "xno" -a "x$MCS" = "xno"  ; then
+if test "x$CSC" = "xno" -a "x$MCS" = "xno" -a "x$GMCS" = "xno" ; then
 	AC_MSG_ERROR([No $CS compiler found])
+fi
+
+if test "x$MCS" = "xno" ; then
+  MCS=$GMCS
 fi
 
 if test "x$MCS" = "xno" ; then
@@ -98,6 +103,7 @@ MPI_KIND="openmpi"
 MPI_COMPILEINFO="--showme:compile"
 MPI_LINKINFO="--showme:link"
 MPI_SHARED_LIB_NAME="mpi"
+CSHARP_DEFINES="$CSHARP_DEFINES -define:LIBMPI"
 MPI_FUNC_PREFIX="MPI"
 ],[])
 fi
@@ -114,6 +120,7 @@ MPI_KIND="lam"
 MPI_COMPILEINFO="--showme"
 MPI_LINKINFO="--showme"
 MPI_SHARED_LIB_NAME="mpi"
+CSHARP_DEFINES="$CSHARP_DEFINES -define:LIBMPI"
 MPI_FUNC_PREFIX="MPI"
 ],[])
 fi
@@ -121,6 +128,7 @@ CC="$real_CC"
 
 if test "x$MPI_SHARED_LIB_NAME" == "x" ; then
   MPI_SHARED_LIB_NAME="mpi"
+  CSHARP_DEFINES="$CSHARP_DEFINES -define:LIBMPI"
   MPI_FUNC_PREFIX="MPI"
 fi
 
