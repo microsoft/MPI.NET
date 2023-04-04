@@ -45,7 +45,7 @@ EXTRA_DIST = $(SOURCES) Unsafe.cs Unsafe.pl MPI.dll.config.in
 CLEANFILES = MPI.dll CustomUnsafe.cs cbridge.c
 
 MPI.dll: $(SOURCES) CustomUnsafe.cs
-	$(MCS) -out:$@ -unsafe -target:library $(CSHARP_FLAGS) $(SOURCES) CustomUnsafe.cs
+	$(MCS) -out:$@ -unsafe -target:library $(CSHARP_FLAGS) $(SOURCES) CustomUnsafe.cs /keyfile:MPI.snk
 
 CustomUnsafe.cs cbridge.c: $(srcdir)/Unsafe.cs $(srcdir)/Unsafe.pl $(MPI_HEADER)
 	$(PERL) $(srcdir)/Unsafe.pl $(MPI_HEADER) $(srcdir)/Unsafe.cs CustomUnsafe.cs cbridge.c @DEFS@
