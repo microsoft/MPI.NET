@@ -681,9 +681,7 @@ namespace MPI
             if (datatype == Unsafe.MPI_DATATYPE_NULL)
             {
 
-                object valuesObj;
-                SendReceive((object)inValues, dest, sendTag, source, recvTag, out valuesObj, out status);
-                outValues = (T[])valuesObj;
+                SendReceive<T[]>(inValues, dest, sendTag, source, recvTag, out outValues, out status);
                 status = new CompletedStatus(status.status, outValues.Length);
             }
             else
@@ -855,7 +853,7 @@ namespace MPI
             MPI_Datatype datatype = FastDatatypeCache<T>.datatype;
             if (datatype == Unsafe.MPI_DATATYPE_NULL)
             {
-                Send((object)values, dest, tag);
+                Send<T[]>(values, dest, tag);
             }
             else
             {

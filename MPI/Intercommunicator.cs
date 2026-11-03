@@ -10,6 +10,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Runtime.Serialization;
 
 namespace MPI
 {
@@ -1381,6 +1382,16 @@ namespace MPI
                                                         outPtr, remoteCounts.Length, Unsafe.MPI_INT, 0, collectiveTag, shadowComm, out mpiStatus);
                     }
 
+                    long remoteTotalCounts = 0;
+                    foreach (int count in remoteCounts)
+                    {
+                        if (count < 0)
+                            throw new SerializationException("Negative remote reduce-scatter count.");
+                        remoteTotalCounts += count;
+                    }
+                    if (remoteTotalCounts != totalCounts)
+                        throw new SerializationException("Remote reduce-scatter counts do not match the local total.");
+
                     T[][] values = new T[RemoteSize][]; // for holding received values
                     T[] accValues = new T[totalCounts]; // for holding accumulated values
                     T[] remoteAccValues; // for holding received accumulated values
@@ -1407,6 +1418,7 @@ namespace MPI
                     errorCode = Unsafe.MPI_Get_count(ref mpiStatus, Unsafe.MPI_BYTE, out recvCount);
                     if (errorCode != Unsafe.MPI_SUCCESS)
                         throw Environment.TranslateErrorIntoException(errorCode);
+                    Serialization.ValidateSerializedMessageSize(recvCount);
                     using (UnmanagedMemoryStream recvStream = new UnmanagedMemoryStream(recvCount))
                     {
                         unsafe
@@ -1414,6 +1426,8 @@ namespace MPI
                             errorCode = Unsafe.MPI_Recv(recvStream.Buffer, recvCount, Unsafe.MPI_BYTE, 0, collectiveTag, shadowComm, out mpiStatus);
                         }
                         values[0] = Deserialize<T[]>(recvStream);
+                        if (values[0] == null || values[0].Length != totalCounts)
+                            throw new SerializationException("Unexpected reduce-scatter array length.");
                         Unsafe.MPI_Wait(ref mpiRequest, out mpiStatus);
                     }
                     for (int j = 0; j < totalCounts; j++)
@@ -1428,6 +1442,7 @@ namespace MPI
                         errorCode = Unsafe.MPI_Get_count(ref mpiStatus, Unsafe.MPI_BYTE, out recvCount);
                         if (errorCode != Unsafe.MPI_SUCCESS)
                             throw Environment.TranslateErrorIntoException(errorCode);
+                        Serialization.ValidateSerializedMessageSize(recvCount);
                         using (UnmanagedMemoryStream recvStream = new UnmanagedMemoryStream(recvCount))
                         {
                             unsafe
@@ -1435,6 +1450,8 @@ namespace MPI
                                 errorCode = Unsafe.MPI_Recv(recvStream.Buffer, recvCount, Unsafe.MPI_BYTE, i, collectiveTag, shadowComm, out mpiStatus);
                             }
                             values[i] = Deserialize<T[]>(recvStream);
+                            if (values[i] == null || values[i].Length != totalCounts)
+                                throw new SerializationException("Unexpected reduce-scatter array length.");
                         }
                         Unsafe.MPI_Wait(ref mpiRequest, out mpiStatus);
 
@@ -1460,6 +1477,7 @@ namespace MPI
                     errorCode = Unsafe.MPI_Get_count(ref mpiStatus, Unsafe.MPI_BYTE, out recvCount);
                     if (errorCode != Unsafe.MPI_SUCCESS)
                         throw Environment.TranslateErrorIntoException(errorCode);
+                    Serialization.ValidateSerializedMessageSize(recvCount);
                     using (UnmanagedMemoryStream recvStream = new UnmanagedMemoryStream(recvCount))
                     {
                         unsafe
@@ -1467,6 +1485,8 @@ namespace MPI
                             errorCode = Unsafe.MPI_Recv(recvStream.Buffer, recvCount, Unsafe.MPI_BYTE, 0, collectiveTag, shadowComm, out mpiStatus);
                         }
                         remoteAccValues = Deserialize<T[]>(recvStream);
+                        if (remoteAccValues == null || remoteAccValues.Length != totalCounts)
+                            throw new SerializationException("Unexpected reduce-scatter array length.");
                         Unsafe.MPI_Wait(ref mpiRequest, out mpiStatus);
                     }
 
@@ -1513,6 +1533,7 @@ namespace MPI
                     errorCode = Unsafe.MPI_Get_count(ref mpiStatus, Unsafe.MPI_BYTE, out recvCount);
                     if (errorCode != Unsafe.MPI_SUCCESS)
                         throw Environment.TranslateErrorIntoException(errorCode);
+                    Serialization.ValidateSerializedMessageSize(recvCount);
                     using (UnmanagedMemoryStream recvStream = new UnmanagedMemoryStream(recvCount))
                     {
                         unsafe
@@ -1520,6 +1541,8 @@ namespace MPI
                             errorCode = Unsafe.MPI_Recv(recvStream.Buffer, recvCount, Unsafe.MPI_BYTE, 0, collectiveTag, shadowComm, out mpiStatus);
                         }
                         outValues = Deserialize<T[]>(recvStream);
+                        if (outValues == null || outValues.Length != counts[Rank])
+                            throw new SerializationException("Unexpected reduce-scatter array length.");
                     }
                 }
             

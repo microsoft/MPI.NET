@@ -14,7 +14,7 @@ EXTRA_DIST = DatatypesTest.cs
 CLEANFILES = DatatypesTest.exe
 
 DatatypesTest.exe: $(srcdir)/DatatypesTest.cs ../../MPI/MPI.dll  ../../TestCommons/TestCommons.dll 
-	$(MCS) -out:$@ -target:exe $(CSHARP_FLAGS) -unsafe -lib:../../MPI -reference:MPI.dll -lib:../../TestCommons -reference:TestCommons.dll $(srcdir)/DatatypesTest.cs
+	$(MCS) -out:$@ -target:exe $(CSHARP_FLAGS) -unsafe -r:System.Runtime.Serialization -r:System.Xml -lib:../../MPI -reference:MPI.dll -lib:../../TestCommons -reference:TestCommons.dll $(srcdir)/DatatypesTest.cs
 
 all: DatatypesTest.exe
 

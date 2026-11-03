@@ -14,6 +14,9 @@ using System;
 using MPI;
 using System.Diagnostics;
 using System.Collections.Generic;
+using System.IO;
+using System.Runtime.Serialization;
+using System.Xml;
 using MPI.TestCommons;
 
 unsafe public struct Dimensions
@@ -154,6 +157,167 @@ struct ContainsBool
 
 class DatatypesTest
 {
+    [Serializable]
+    class SerializationNode
+    {
+        public SerializationNode Next;
+        public static bool CallbackInvoked;
+
+        [OnDeserialized]
+        void OnDeserialized(StreamingContext context)
+        {
+            CallbackInvoked = true;
+        }
+    }
+
+    static void ExpectException<TException>(Action action) where TException : Exception
+    {
+        bool caught = false;
+        try
+        {
+            action();
+        }
+        catch (TException)
+        {
+            caught = true;
+        }
+        MPIDebug.Assert(caught, "Expected " + typeof(TException).Name);
+    }
+
+    public static void VerifySerialization()
+    {
+        ISerializer serializer = new MPI.Serialization().Serializer;
+        using (var stream = new MemoryStream())
+        {
+            serializer.Serialize(stream, new AggregateData(512));
+            stream.Position = 0;
+            MPIDebug.Assert(serializer.Deserialize<AggregateData>(stream).Check(512));
+            MPIDebug.Assert(stream.CanRead && stream.CanWrite);
+        }
+        using (var stream = new MemoryStream())
+        {
+            serializer.Serialize(stream, new string[] { "first", null, "last" });
+            serializer.Serialize(stream, "next value");
+            stream.Position = 0;
+            var result = serializer.Deserialize<string[]>(stream);
+            MPIDebug.Assert(result.Length == 3 && result[0] == "first"
+                && result[1] == null && result[2] == "last");
+            MPIDebug.Assert(serializer.Deserialize<string>(stream) == "next value");
+        }
+
+        var knownSerializer = new MPI.DataContractSerializer(new[] { typeof(SerializationNode) });
+        var node = new SerializationNode();
+        node.Next = node;
+        using (var stream = new MemoryStream())
+        {
+            knownSerializer.Serialize<object>(stream, node);
+            stream.Position = 0;
+            SerializationNode.CallbackInvoked = false;
+            ExpectException<SerializationException>(() => serializer.Deserialize<object>(stream));
+            MPIDebug.Assert(!SerializationNode.CallbackInvoked);
+            stream.Position = 0;
+            var result = (SerializationNode)knownSerializer.Deserialize<object>(stream);
+            MPIDebug.Assert(ReferenceEquals(result, result.Next) && SerializationNode.CallbackInvoked);
+        }
+        using (var stream = new MemoryStream())
+        {
+            serializer.Serialize(stream, new string('x', 1024));
+            stream.Position = 0;
+            var limited = new MPI.DataContractSerializer(readerQuotas:
+                new XmlDictionaryReaderQuotas { MaxStringContentLength = 16 });
+            ExpectException<SerializationException>(() => limited.Deserialize<string>(stream));
+        }
+        using (var stream = new MemoryStream())
+        {
+            serializer.Serialize(stream, new[] { "a", "b", "c", "d" });
+            stream.Position = 0;
+            var limited = new MPI.DataContractSerializer(maxItemsInObjectGraph: 2);
+            ExpectException<SerializationException>(() => limited.Deserialize<string[]>(stream));
+        }
+        // A benign BinaryFormatter string payload must not be accepted by the new default.
+        using (var stream = new MemoryStream(Convert.FromBase64String("AAEAAAD/////AQAAAAAAAAAGAQAAAAZsZWdhY3kL")))
+            ExpectException<SerializationException>(() => serializer.Deserialize<string>(stream));
+#pragma warning disable 618
+        ExpectException<NotSupportedException>(() => BinaryFormatterSerializer.Default.Deserialize<object>(Stream.Null));
+        ExpectException<NotSupportedException>(() => BinaryFormatterSerializer.Default.Serialize(Stream.Null, "legacy"));
+#pragma warning restore 618
+    }
+
+    static void VerifyReceiveLimits(Intracommunicator comm)
+    {
+        int bufferSize = comm.Serialization.BufferSize;
+        long messageLimit = comm.Serialization.MaxSerializedMessageSize;
+        comm.Serialization.BufferSize = 64;
+        comm.Serialization.MaxSerializedMessageSize = 64;
+        try
+        {
+            if (comm.Rank == 0)
+            {
+                comm.Send(-1, 1, 100);
+                comm.Send(65, 1, 101);
+                using (var stream = new MemoryStream())
+                {
+                    comm.Serialization.Serializer.Serialize(stream, new string('x', 1024));
+                    var firstBlock = new byte[64];
+                    Array.Copy(stream.ToArray(), firstBlock, firstBlock.Length);
+                    comm.Send(64, 1, 102);
+                    comm.Send(firstBlock, 1, 102);
+                    comm.Send(64, 1, 102);
+                }
+            }
+            else
+            {
+                for (int tag = 100; tag <= 102; tag++)
+                {
+                    int receiveTag = tag;
+                    ExpectException<SerializationException>(() =>
+                    {
+                        string value;
+                        CompletedStatus status;
+                        comm.Receive(0, receiveTag, out value, out status);
+                    });
+                }
+            }
+            comm.Barrier();
+        }
+        finally
+        {
+            comm.Serialization.BufferSize = bufferSize;
+            comm.Serialization.MaxSerializedMessageSize = messageLimit;
+        }
+    }
+
+    static void VerifyStreamedMessages(Intracommunicator comm)
+    {
+        string expected = new string('x', 1024);
+        using (var stream = new MemoryStream())
+        {
+            comm.Serialization.Serializer.Serialize(stream, expected);
+            foreach (int blockSize in new[] { 64, (int)stream.Length })
+            {
+                using (var testComm = (Intracommunicator)comm.Clone())
+                {
+                    testComm.Serialization.BufferSize = blockSize;
+                    if (testComm.Rank == 0)
+                    {
+                        testComm.Send(expected, 1, 103);
+                        testComm.Send(expected, 1, 103);
+                    }
+                    else
+                    {
+                        string value;
+                        CompletedStatus status;
+                        testComm.Receive(0, 103, out value, out status);
+                        MPIDebug.Assert(value == expected);
+                        MPI.Serialization.ReceiveLarge(testComm, 0, 103, out value);
+                        MPIDebug.Assert(value == expected);
+                    }
+                    testComm.Barrier();
+                }
+            }
+        }
+    }
+
     private struct Hidden
     {
         public Hidden(int x, int y)
@@ -202,6 +366,7 @@ class DatatypesTest
 
     public static void DoTest(string[] args)
     {
+        VerifySerialization();
         int dataSize = 10000000;
         //using (MPI.Environment env = new MPI.Environment(ref args))
         {
@@ -210,7 +375,13 @@ class DatatypesTest
                 System.Console.WriteLine("The Datatypes test must be run with two processes.");
                 System.Console.WriteLine("Try: mpiexec -np 2 datatypes.exe");
             }
-            else if (Communicator.world.Rank == 0)
+            else
+            {
+                VerifyReceiveLimits(Communicator.world);
+                VerifyStreamedMessages(Communicator.world);
+                Communicator.world.Serialization.BufferSize = 1024 * 1024;
+            }
+            if (Communicator.world.Size == 2 && Communicator.world.Rank == 0)
             {
                 // Send an object that contains a "fixed" field
                 Dimensions dims;
@@ -237,7 +408,7 @@ class DatatypesTest
                 ContainsBool containsBool = new ContainsBool(17);
                 Communicator.world.Send(containsBool, 1, 4);
             }
-            else
+            else if (Communicator.world.Size == 2)
             {
                 // Receive and check an object that contains a "fixed" field
                 Dimensions dims;
