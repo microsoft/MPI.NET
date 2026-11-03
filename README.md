@@ -14,6 +14,36 @@ The [documentation subfolder](https://github.com/Microsoft/MPI.NET/tree/master/D
 
 Code examples are available [here](https://github.com/Microsoft/MPI.NET/tree/master/Examples).
 
+### Serialized communication
+
+The default `MPI.DataContractSerializer` uses framed binary XML and the declared
+message type. `BinaryFormatterSerializer` is disabled: both methods throw
+`NotSupportedException`. This wire format is incompatible with older versions;
+upgrade all communicating ranks together.
+
+Data contracts, including `[Serializable]` types, can be transmitted. Polymorphic
+values require known types declared locally with `[KnownType]` or configured on
+every participating communicator:
+
+```csharp
+comm.Serialization.Serializer = new MPI.DataContractSerializer(
+    knownTypes: new[] { typeof(MyMessage) });
+```
+
+Only register contracts whose constructors, serialization callbacks, and setters
+are safe to invoke on peer-controlled data. Peer-supplied CLR type names are not
+resolved. Existing custom `ISerializer` implementations remain supported and must
+be reviewed separately.
+
+The default serializer limits XML depth to 64, string length and array length to
+16,777,216 characters/elements, and object graphs to 16,777,216 items. Its
+constructor accepts custom reader quotas and an object-graph limit. Large-object
+receives and intercommunicator `ReduceScatter` also reject serialized messages
+larger than `comm.Serialization.MaxSerializedMessageSize` (256 MiB by default)
+before allocating incoming blocks or whole-message receive buffers. Raise these
+limits explicitly for larger workloads. `BufferSize` remains the per-block limit,
+not the whole-message limit.
+
 ## Contributions
 
 MPI.NET was authored by Douglas Gregor, Andrew Lumsdaine, Ben Martin (and others TBC) (Copyright 2005-2008 The Trustees of Indiana University).

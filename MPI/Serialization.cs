@@ -5,9 +5,11 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.Serialization;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml;
 
 namespace MPI
 {
@@ -17,7 +19,7 @@ namespace MPI
         /// Used to serialize non-primitive objects.  
         /// All processes communicating with this Communicator must have the same value.
         /// </summary>
-        public ISerializer Serializer { get; set; } = BinaryFormatterSerializer.Default;
+        public ISerializer Serializer { get; set; } = DataContractSerializer.Default;
         /// <summary>
         /// Delegate to be called with the size of every block of serialized data sent.
         /// </summary>
@@ -32,6 +34,11 @@ namespace MPI
         /// </summary>
         public int BufferSize { get; set; } = 1024 * 1024 * 16;
         /// <summary>
+        /// Maximum serialized message size accepted by large-object receives and
+        /// intercommunicator reduce-scatter, in bytes.
+        /// </summary>
+        public long MaxSerializedMessageSize { get; set; } = 256L * 1024 * 1024;
+        /// <summary>
         /// The maximum number of serialization worker threads to create.
         /// </summary>
         public int WorkerCount { get; set; } = 16;
@@ -39,6 +46,20 @@ namespace MPI
         internal BlockingCollection<ISerializedReceiveInfo> Receives = new BlockingCollection<ISerializedReceiveInfo>();
         internal BlockingCollection<ISerializedSendInfo> Sends = new BlockingCollection<ISerializedSendInfo>();
         internal ConcurrentQueue<Serialization.RequestGenerator> WorkItems = new ConcurrentQueue<Serialization.RequestGenerator>();
+
+        internal void ValidateSerializedMessageSize(long length)
+        {
+            if (length < 0 || length > MaxSerializedMessageSize)
+                throw new SerializationException("Serialized message exceeds the configured size limit or has a negative length.");
+        }
+
+        internal void ValidateSerializedBlockSize(int length, ref long totalBytes)
+        {
+            if (length < 0 || length > BufferSize)
+                throw new SerializationException("Invalid serialized block length.");
+            totalBytes = checked(totalBytes + length);
+            ValidateSerializedMessageSize(totalBytes);
+        }
 
         public void Dispose()
         {
@@ -94,7 +115,7 @@ namespace MPI
                 if (bytes.Length < comm.Serialization.BufferSize)
                     done = true; // the receiver knows that this is the last block.
             };
-            using (var stream = new BufferedStream(new ActionStream(null, writeAction, flushAction), comm.Serialization.BufferSize))
+            using (var stream = new ActionStream(null, writeAction, flushAction, comm.Serialization.BufferSize))
             {
                 comm.Serialization.Serializer.Serialize(stream, value);
             }
@@ -149,6 +170,7 @@ namespace MPI
             bool done = false;
             byte[] leftoverBytes = null;
             int leftoverPosition = 0;
+            long totalBytes = 0;
             Func<byte[], int> readAction = delegate (byte[] bytes)
             {
                 if (done)
@@ -161,6 +183,7 @@ namespace MPI
                 else
                 {
                     comm.Receive(source, tag, out length, out innerStatus);
+                    comm.Serialization.ValidateSerializedBlockSize(length, ref totalBytes);
                 }
                 if (length < comm.Serialization.BufferSize)
                     done = true;
@@ -192,6 +215,8 @@ namespace MPI
             using (var stream = new BufferedStream(new ActionStream(readAction, null), comm.Serialization.BufferSize))
             {
                 value = comm.Serialization.Serializer.Deserialize<T>(stream);
+                if (stream.ReadByte() != -1)
+                    throw new SerializationException("Unexpected data after the serialized message.");
             }
             status = innerStatus;
         }
@@ -540,7 +565,7 @@ namespace MPI
                         comm.Serialization.SendLogger?.Invoke(bytes.Length, dest);
                         waitHandle.WaitOne();
                     };
-                    using (var stream = new BufferedStream(new ActionStream(null, writeAction, flushAction), comm.Serialization.BufferSize))
+                    using (var stream = new ActionStream(null, writeAction, flushAction, comm.Serialization.BufferSize))
                     {
                         while (true)
                         {
@@ -571,6 +596,7 @@ namespace MPI
                     bool done = false;
                     int source = default(int);
                     int tag = default(int);
+                    long totalBytes = 0;
                     Func<byte[], int> readAction = delegate (byte[] bytes)
                     {
                         if (done)
@@ -582,6 +608,7 @@ namespace MPI
                         );
                         workItems.Enqueue(workItem);
                         waitHandle.WaitOne();
+                        comm.Serialization.ValidateSerializedBlockSize(length, ref totalBytes);
                         if (length < comm.Serialization.BufferSize)
                             done = true;
                         if (length == 0)
@@ -601,9 +628,12 @@ namespace MPI
                             if (info == null)
                                 break;
                             done = false;
+                            totalBytes = 0;
                             source = info.Source;
                             tag = info.Tag;
                             info.Deserialize(comm.Serialization.Serializer, stream);
+                            if (stream.ReadByte() != -1)
+                                throw new SerializationException("Unexpected data after the serialized message.");
                             info.Completed();
                         }
                     }
@@ -680,6 +710,111 @@ namespace MPI
         T Deserialize<T>(Stream stream);
     }
 
+    /// <summary>
+    /// Serializes declared data contracts using framed binary XML and bounded reader quotas.
+    /// </summary>
+    public class DataContractSerializer : ISerializer
+    {
+        const int FrameSize = 4096;
+        /// <summary>The default serializer, with no additional known types.</summary>
+        public static readonly DataContractSerializer Default = new DataContractSerializer();
+
+        readonly Type[] knownTypes;
+        readonly int maxItemsInObjectGraph;
+        readonly XmlDictionaryReaderQuotas readerQuotas;
+
+        /// <summary>
+        /// Creates a serializer. Only locally declared contracts and explicitly known types
+        /// can be deserialized; known types must be safe to construct from peer data.
+        /// </summary>
+        /// <param name="knownTypes">Additional types permitted in polymorphic values.</param>
+        /// <param name="maxItemsInObjectGraph">Maximum number of items in an object graph.</param>
+        /// <param name="readerQuotas">Reader limits, copied at construction. Defaults to
+        /// depth 64 and 16,777,216 characters per string or elements per array.</param>
+        public DataContractSerializer(IEnumerable<Type> knownTypes = null,
+            int maxItemsInObjectGraph = 16 * 1024 * 1024, XmlDictionaryReaderQuotas readerQuotas = null)
+        {
+            if (maxItemsInObjectGraph <= 0)
+                throw new ArgumentOutOfRangeException(nameof(maxItemsInObjectGraph));
+            this.knownTypes = knownTypes == null ? new Type[0] : knownTypes.ToArray();
+            this.maxItemsInObjectGraph = maxItemsInObjectGraph;
+            this.readerQuotas = new XmlDictionaryReaderQuotas
+            {
+                MaxDepth = 64,
+                MaxStringContentLength = 16 * 1024 * 1024,
+                MaxArrayLength = 16 * 1024 * 1024
+            };
+            if (readerQuotas != null)
+                readerQuotas.CopyTo(this.readerQuotas);
+        }
+
+        System.Runtime.Serialization.DataContractSerializer CreateSerializer<T>()
+        {
+            return new System.Runtime.Serialization.DataContractSerializer(typeof(T),
+                new DataContractSerializerSettings
+                {
+                    KnownTypes = knownTypes,
+                    MaxItemsInObjectGraph = maxItemsInObjectGraph,
+                    PreserveObjectReferences = true
+                });
+        }
+
+        /// <summary>Reads a value without closing the caller's stream.</summary>
+        public T Deserialize<T>(Stream stream)
+        {
+            using (var input = new BinaryReader(stream, Encoding.UTF8, true))
+            {
+                int remaining = 0;
+                bool done = false;
+                using (var framedStream = new ActionStream(bytes =>
+                {
+                    if (done)
+                        return 0;
+                    if (remaining == 0)
+                    {
+                        remaining = input.ReadInt32();
+                        if (remaining < 0 || remaining > FrameSize)
+                            throw new SerializationException("Invalid serialized XML frame length.");
+                        if (remaining == 0)
+                        {
+                            done = true;
+                            return 0;
+                        }
+                    }
+                    int count = input.Read(bytes, 0, Math.Min(bytes.Length, remaining));
+                    if (count == 0)
+                        throw new SerializationException("Truncated serialized XML frame.");
+                    remaining -= count;
+                    return count;
+                }, null))
+                using (var reader = XmlDictionaryReader.CreateBinaryReader(framedStream, readerQuotas))
+                {
+                    T value = (T)CreateSerializer<T>().ReadObject(reader);
+                    if (reader.MoveToContent() != XmlNodeType.None)
+                        throw new SerializationException("Unexpected data after the serialized value.");
+                    return value;
+                }
+            }
+        }
+
+        /// <summary>Writes a value without closing the caller's stream.</summary>
+        public void Serialize<T>(Stream stream, T value)
+        {
+            using (var output = new BinaryWriter(stream, Encoding.UTF8, true))
+            {
+                using (var framedStream = new ActionStream(null, bytes =>
+                {
+                    output.Write(bytes.Length);
+                    output.Write(bytes);
+                }, null, FrameSize))
+                using (var writer = XmlDictionaryWriter.CreateBinaryWriter(framedStream, null, null, false))
+                    CreateSerializer<T>().WriteObject(writer, value);
+                output.Write(0);
+            }
+        }
+    }
+
+    [Obsolete("BinaryFormatter is disabled. Use DataContractSerializer or another safe ISerializer.")]
     public class BinaryFormatterSerializer : ISerializer
     {
         public static readonly BinaryFormatterSerializer Default;
@@ -691,14 +826,12 @@ namespace MPI
 
         public T Deserialize<T>(Stream stream)
         {
-            var formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter();
-            return (T)formatter.Deserialize(stream);
+            throw new NotSupportedException("BinaryFormatter deserialization is disabled. Configure a safe ISerializer.");
         }
 
         public void Serialize<T>(Stream stream, T value)
         {
-            var formatter = new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter();
-            formatter.Serialize(stream, value);
+            throw new NotSupportedException("BinaryFormatter serialization is disabled. Configure a safe ISerializer.");
         }
     }
 }
